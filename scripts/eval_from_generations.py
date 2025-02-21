@@ -81,6 +81,8 @@ class EvalConfig(Config):
         # number of GPUs to do batch evaluation
         self.num_gpu_devices = 1
 
+        # Number of samples to evaluate per problem
+        self.num_samples_per_problem = 1  # default to 1 for backward compatibility
 
     def __repr__(self):
         return f"EvalConfig({self.to_dict()})"
@@ -331,7 +333,7 @@ def check_if_eval_exists_local(problem_id: int, sample_id: int, eval_file_path: 
     if os.path.exists(eval_file_path):
         with open(eval_file_path, 'r') as f:
             eval_results = json.load(f)
-        return str(problem_id) in eval_results
+        return str(problem_id) in eval_results and str(sample_id) in eval_results[str(problem_id)]
     return False
 
 def add_to_eval_results_file(problem_id: int, sample_id: int, eval_result: KernelExecResult, eval_file_path: str):
@@ -346,10 +348,12 @@ def add_to_eval_results_file(problem_id: int, sample_id: int, eval_result: Kerne
     else:
         eval_results = {}
     
-    # Add new result
-    eval_results[str(problem_id)] = {
-        # assume 1 sample for now, will think about how to do this better for more samples
-        'sample_id': sample_id,
+    # Initialize problem entry if it doesn't exist
+    if str(problem_id) not in eval_results:
+        eval_results[str(problem_id)] = {}
+    
+    # Add new result for this sample
+    eval_results[str(problem_id)][str(sample_id)] = {
         'compiled': eval_result.compiled,
         'correctness': eval_result.correctness,
         'metadata': check_metadata_serializable_all_types(eval_result.metadata),
@@ -405,7 +409,7 @@ def main(config: EvalConfig):
         assert config.subset[0] >= 1 and config.subset[1] <= num_problems_in_level, f"Subset range {config.subset} out of range for Level {config.level}"
         problem_id_range = range(config.subset[0], config.subset[1])
 
-    print(f"Evaluating 1 sample each for level {config.level} problems: {problem_id_range}")
+    print(f"Evaluating up to {config.num_samples_per_problem} samples each for level {config.level} problems: {problem_id_range}")
 
     run_dir = os.path.join(config.runs_dir, config.run_name)
     eval_file_path = os.path.join(run_dir, f"eval_results.json")
@@ -419,10 +423,10 @@ def main(config: EvalConfig):
     # single_eval_example(config, curr_level_dataset, run_dir, eval_file_path)
 
     total_work = []
-    for problem_id in range(problem_id_range.start, problem_id_range.stop + 1): # end index is inclusive
-        sample_id = 0 # only evaluate 1 sample for now
-        if not check_if_eval_exists_local(problem_id, sample_id, eval_file_path):
-            total_work.append((problem_id, sample_id))
+    for problem_id in range(problem_id_range.start, problem_id_range.stop + 1):
+        for sample_id in range(config.num_samples_per_problem):
+            if not check_if_eval_exists_local(problem_id, sample_id, eval_file_path):
+                total_work.append((problem_id, sample_id))
 
     print(f"Start evaluation on {len(total_work)} unevaluated samples in range: {problem_id_range}")
     # Build Cache on CPU as that is faster
